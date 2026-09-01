@@ -23,8 +23,14 @@ import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { StatCard } from "@/components/report/stat-card";
 import { BreakdownList } from "@/components/report/breakdown-list";
+import { TrendChart } from "@/components/report/trend-chart";
+import { BreakdownChart } from "@/components/report/breakdown-chart";
+import { StatusBadge } from "@/components/report/status-badge";
+import { StatusEditor } from "@/components/report/status-editor";
+import { AttachmentList } from "@/components/report/attachment-list";
 import { UNIT_OPTIONS } from "@/lib/form-config";
 import { WHISTLEBLOWER_CATEGORIES } from "@/lib/whistleblower-config";
+import { STATUS_OPTIONS } from "@/lib/status-config";
 import type { WhistleblowerRow, WhistleblowerStats } from "@/lib/sheets";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +39,7 @@ type Filters = {
   kategori: string;
   unit: string;
   mode: "all" | "Ya" | "Tidak";
+  status: string;
   dateFrom: string;
   dateTo: string;
 };
@@ -42,6 +49,7 @@ const DEFAULT_FILTERS: Filters = {
   kategori: "all",
   unit: "all",
   mode: "all",
+  status: "all",
   dateFrom: "",
   dateTo: "",
 };
@@ -64,6 +72,7 @@ function buildQuery(f: Filters): string {
   if (f.kategori !== "all") sp.set("kategori", f.kategori);
   if (f.unit !== "all") sp.set("unit", f.unit);
   if (f.mode !== "all") sp.set("mode", f.mode);
+  if (f.status !== "all") sp.set("status", f.status);
   if (f.dateFrom) sp.set("dateFrom", f.dateFrom);
   if (f.dateTo) sp.set("dateTo", f.dateTo);
   return sp.toString();
@@ -165,6 +174,7 @@ export function WhistleblowerDashboard() {
     filters.kategori !== "all" ||
     filters.unit !== "all" ||
     filters.mode !== "all" ||
+    filters.status !== "all" ||
     filters.dateFrom !== "" ||
     filters.dateTo !== "";
 
@@ -225,6 +235,18 @@ export function WhistleblowerDashboard() {
           accent="warning"
         />
       </section>
+
+      {/* Grafik & Analitik */}
+      {load.kind === "ready" && load.stats.total > 0 ? (
+        <section className="grid gap-4 lg:grid-cols-2">
+          <TrendChart data={load.stats.perMonth} />
+          <BreakdownChart
+            title="Per Status Tindak Lanjut"
+            items={Object.entries(load.stats.perStatus)}
+            total={load.stats.total}
+          />
+        </section>
+      ) : null}
 
       {/* Breakdown */}
       {load.kind === "ready" && load.stats.total > 0 ? (
@@ -336,6 +358,26 @@ export function WhistleblowerDashboard() {
               <option value="all">Semua</option>
               <option value="Ya">Anonim</option>
               <option value="Tidak">Identitas</option>
+            </Select>
+          </div>
+
+          <div>
+            <Label htmlFor="wb-status" className="mb-1.5 block text-xs">
+              Status
+            </Label>
+            <Select
+              id="wb-status"
+              value={filters.status}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, status: e.target.value }))
+              }
+            >
+              <option value="all">Semua</option>
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
             </Select>
           </div>
 
@@ -458,6 +500,7 @@ export function WhistleblowerDashboard() {
                             {r.nama || "Identitas"}
                           </span>
                         )}
+                        <StatusBadge status={r.status} />
                       </div>
                       <p className="text-sm text-foreground line-clamp-2">
                         {r.detail || "(detail kosong)"}
@@ -515,7 +558,20 @@ export function WhistleblowerDashboard() {
                           span
                           multiline
                         />
+                        <div className="sm:col-span-2">
+                          <AttachmentList raw={r.lampiran} />
+                        </div>
                       </dl>
+
+                      <div className="mt-4">
+                        <StatusEditor
+                          endpoint="/api/report/whistleblower/update-status"
+                          rowIndex={r.rowIndex}
+                          currentStatus={r.status}
+                          currentCatatan={r.catatanAdmin}
+                          onSaved={() => void fetchData()}
+                        />
+                      </div>
                     </div>
                   ) : null}
                 </div>

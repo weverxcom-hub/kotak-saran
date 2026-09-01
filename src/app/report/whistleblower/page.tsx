@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Inbox, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Inbox, ShieldAlert, FileText } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { SiteFooter } from "@/components/site-footer";
@@ -72,6 +72,13 @@ export default function ReportWhistleblowerPage() {
             <ShieldAlert className="h-4 w-4" />
             Whistleblower
           </span>
+          <Link
+            href="/report/laporan"
+            className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          >
+            <FileText className="h-4 w-4" />
+            Laporan Dekan
+          </Link>
         </nav>
 
         <WhistleblowerDashboard />

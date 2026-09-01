@@ -21,6 +21,7 @@ import {
   Sparkles,
   PartyPopper,
   Home,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +29,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { OptionCard } from "@/components/option-card";
 import { ProgressSteps, type Step } from "@/components/progress-steps";
+import { FileUploadField } from "@/components/file-upload-field";
+import { CaseIdCopy } from "@/components/case-id-copy";
+import { uploadAttachments } from "@/lib/upload-client";
 import {
   ROLE_OPTIONS,
   UNIT_OPTIONS,
@@ -88,6 +92,7 @@ const INITIAL_STATE: FormState = {
 
 type SubmitStatus =
   | { kind: "idle" }
+  | { kind: "uploading" }
   | { kind: "submitting" }
   | { kind: "success" }
   | { kind: "error"; message: string };
@@ -95,7 +100,9 @@ type SubmitStatus =
 export function SaranForm() {
   const [step, setStep] = React.useState(1);
   const [state, setState] = React.useState<FormState>(INITIAL_STATE);
+  const [lampiranFiles, setLampiranFiles] = React.useState<File[]>([]);
   const [status, setStatus] = React.useState<SubmitStatus>({ kind: "idle" });
+  const [trackingId, setTrackingId] = React.useState<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
@@ -145,11 +152,29 @@ export function SaranForm() {
   };
 
   const submit = async () => {
-    setStatus({ kind: "submitting" });
     const finalRole =
       state.saudaraAdalah === "Other"
         ? state.saudaraOther.trim()
         : state.saudaraAdalah;
+
+    let lampiran: SuggestionPayload["lampiran"];
+    if (lampiranFiles.length > 0) {
+      setStatus({ kind: "uploading" });
+      try {
+        lampiran = await uploadAttachments(lampiranFiles);
+      } catch (err) {
+        setStatus({
+          kind: "error",
+          message:
+            err instanceof Error
+              ? `Gagal upload lampiran: ${err.message}`
+              : "Gagal upload lampiran.",
+        });
+        return;
+      }
+    }
+
+    setStatus({ kind: "submitting" });
     const payload: SuggestionPayload = {
       saudaraAdalah: finalRole,
       unitKerja: state.unitKerja as SuggestionPayload["unitKerja"],
@@ -159,6 +184,7 @@ export function SaranForm() {
       masukan: state.masukan.trim(),
       kronologi: state.kronologi.trim() || undefined,
       kontak: state.kontak.trim() || undefined,
+      lampiran,
     };
     try {
       const res = await fetch("/api/saran", {
@@ -177,6 +203,8 @@ export function SaranForm() {
         });
         return;
       }
+      const data = (await res.json()) as { ok: boolean; trackingId?: string };
+      setTrackingId(data.trackingId ?? null);
       setStatus({ kind: "success" });
       setStep(5);
     } catch (err) {
@@ -192,11 +220,14 @@ export function SaranForm() {
 
   const reset = () => {
     setState(INITIAL_STATE);
+    setLampiranFiles([]);
+    setTrackingId(null);
     setStatus({ kind: "idle" });
     setStep(1);
   };
 
-  if (step === 5) return <SuccessScreen onReset={reset} state={state} />;
+  if (step === 5)
+    return <SuccessScreen onReset={reset} state={state} trackingId={trackingId} />;
 
   return (
     <div ref={containerRef} className="w-full">
@@ -211,8 +242,17 @@ export function SaranForm() {
         >
           {step === 1 ? <StepTentangAnda state={state} update={update} /> : null}
           {step === 2 ? <StepPrivasi state={state} update={update} /> : null}
-          {step === 3 ? <StepMasukan state={state} update={update} /> : null}
-          {step === 4 ? <StepTinjau state={state} /> : null}
+          {step === 3 ? (
+            <StepMasukan
+              state={state}
+              update={update}
+              lampiranFiles={lampiranFiles}
+              onLampiranChange={setLampiranFiles}
+            />
+          ) : null}
+          {step === 4 ? (
+            <StepTinjau state={state} lampiranCount={lampiranFiles.length} />
+          ) : null}
         </div>
 
         {status.kind === "error" ? (
@@ -227,7 +267,9 @@ export function SaranForm() {
             type="button"
             variant="ghost"
             onClick={goBack}
-            disabled={step === 1 || status.kind === "submitting"}
+            disabled={
+              step === 1 || status.kind === "submitting" || status.kind === "uploading"
+            }
             className="sm:w-auto"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -250,10 +292,15 @@ export function SaranForm() {
               variant="gradient"
               size="lg"
               onClick={submit}
-              disabled={status.kind === "submitting"}
+              disabled={status.kind === "submitting" || status.kind === "uploading"}
               className="sm:w-auto"
             >
-              {status.kind === "submitting" ? (
+              {status.kind === "uploading" ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Mengupload lampiran…
+                </>
+              ) : status.kind === "submitting" ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Mengirim…
@@ -469,9 +516,13 @@ function StepPrivasi({
 function StepMasukan({
   state,
   update,
+  lampiranFiles,
+  onLampiranChange,
 }: {
   state: FormState;
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  lampiranFiles: File[];
+  onLampiranChange: (files: File[]) => void;
 }) {
   const masukanLen = state.masukan.length;
   const minOk = masukanLen >= 10;
@@ -543,11 +594,19 @@ function StepMasukan({
           autoComplete="tel"
         />
       </div>
+
+      <FileUploadField files={lampiranFiles} onChange={onLampiranChange} />
     </div>
   );
 }
 
-function StepTinjau({ state }: { state: FormState }) {
+function StepTinjau({
+  state,
+  lampiranCount,
+}: {
+  state: FormState;
+  lampiranCount: number;
+}) {
   const role =
     state.saudaraAdalah === "Other" ? state.saudaraOther : state.saudaraAdalah;
   const items: Array<{ label: string; value?: string }> = [
@@ -562,6 +621,8 @@ function StepTinjau({ state }: { state: FormState }) {
   items.push({ label: "Masukan", value: state.masukan });
   if (state.kronologi) items.push({ label: "Kronologi", value: state.kronologi });
   if (state.kontak) items.push({ label: "Kontak", value: state.kontak });
+  if (lampiranCount > 0)
+    items.push({ label: "Lampiran", value: `${lampiranCount} file` });
 
   return (
     <div className="space-y-6">
@@ -602,9 +663,11 @@ function StepTinjau({ state }: { state: FormState }) {
 function SuccessScreen({
   onReset,
   state,
+  trackingId,
 }: {
   onReset: () => void;
   state: FormState;
+  trackingId: string | null;
 }) {
   return (
     <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-xl shadow-success/10 sm:p-12">
@@ -623,11 +686,41 @@ function SuccessScreen({
         layanan Fakultas Ekonomi dan Bisnis Universitas Gajayana Malang.
       </p>
 
+      {trackingId ? (
+        <div className="mx-auto mt-6 max-w-sm rounded-xl border border-border bg-background/60 p-4 text-left sm:p-5">
+          <p className="text-xs uppercase tracking-wider text-muted-foreground">
+            Kode Tracking Anda
+          </p>
+          <div className="mt-1 flex items-center justify-between gap-3">
+            <code className="text-lg font-bold tracking-wider text-foreground">
+              {trackingId}
+            </code>
+            <CaseIdCopy caseId={trackingId} />
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Simpan kode ini untuk cek status tindak lanjut masukan Anda kapan saja
+            di halaman{" "}
+            <a href="/lacak" className="font-medium text-primary hover:underline">
+              /lacak
+            </a>
+            .
+          </p>
+        </div>
+      ) : null}
+
       <div className="mt-8 flex flex-col items-center justify-center gap-2 sm:flex-row sm:gap-3">
         <Button onClick={onReset} variant="gradient" size="lg">
           <Send className="h-4 w-4" />
           Kirim masukan lain
         </Button>
+        {trackingId ? (
+          <Button asChild variant="outline" size="lg">
+            <a href="/lacak">
+              <Search className="h-4 w-4" />
+              Cek status
+            </a>
+          </Button>
+        ) : null}
         <Button asChild variant="outline" size="lg">
           <a href="/">
             <Home className="h-4 w-4" />

@@ -1,4 +1,5 @@
-import { Heart } from "lucide-react";
+import Link from "next/link";
+import { Heart, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function SiteFooter({
@@ -26,6 +27,15 @@ export function SiteFooter({
             <p>
               Versi modern dari Kotak Saran Elektronik resmi · data tetap
               tercatat pada sistem terpusat FEB.
+            </p>
+            <p>
+              <Link
+                href="/lacak"
+                className="inline-flex items-center gap-1 font-medium text-foreground/70 underline-offset-2 transition hover:text-primary hover:underline"
+              >
+                <Search className="h-3 w-3" />
+                Cek status masukan / laporan Anda
+              </Link>
             </p>
           </>
         ) : null}

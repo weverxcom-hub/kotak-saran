@@ -23,6 +23,7 @@ function buildFilters(searchParams: URLSearchParams): Filters {
       mode === "Ya" || mode === "Tidak" || mode === "all"
         ? (mode as Filters["mode"])
         : undefined,
+    status: get("status"),
     dateFrom: get("dateFrom"),
     dateTo: get("dateTo"),
   };

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CheckCircle2, Copy, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Search, ShieldCheck } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { SiteFooter } from "@/components/site-footer";
@@ -93,6 +93,15 @@ export default function WhistleblowerThankYouPage({
             >
               Kembali ke beranda
             </Link>
+            {isValidId ? (
+              <Link
+                href="/lacak"
+                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border px-4 py-2.5 text-sm font-medium text-foreground transition hover:bg-muted"
+              >
+                <Search className="h-4 w-4" />
+                Cek status laporan
+              </Link>
+            ) : null}
             <Link
               href="/whistleblower"
               className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2.5 text-sm font-medium text-foreground transition hover:bg-muted"

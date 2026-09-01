@@ -7,6 +7,8 @@
  * jadi entry ID tidak diperlukan lagi.
  */
 
+import type { AttachmentRef } from "@/lib/lampiran";
+
 export const ROLE_OPTIONS = ["DOSEN", "MAHASISWA", "TENDIK"] as const;
 export type Role = (typeof ROLE_OPTIONS)[number];
 
@@ -29,4 +31,6 @@ export type SuggestionPayload = {
   masukan: string;
   kronologi?: string;
   kontak?: string;
+  /** Lampiran bukti — sudah diupload lewat /api/upload sebelum submit ini. */
+  lampiran?: AttachmentRef[];
 };

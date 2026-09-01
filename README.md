@@ -8,6 +8,10 @@ Versi modern dari **Kotak Saran Elektronik Fakultas Ekonomi dan Bisnis Universit
 
 - **Wizard 4 langkah** dengan progress bar (Tentang Anda → Privasi → Masukan → Tinjau & Kirim)
 - **Conditional anonim**: opsi anonim sepenuhnya, opsi identitas, atau pilih sendiri
+- **Upload bukti**: lampiran foto/dokumen (JPG/PNG/WEBP/PDF, maks 4MB × 3 file) di form Kotak Saran & Whistleblower — lihat [§ Upload Bukti](#-upload-bukti-lampiran)
+- **Tindak lanjut & cek status**: admin bisa update status (Baru/Diproses/Selesai/Ditolak) + catatan, pengirim bisa cek lewat kode tracking di [`/lacak`](#-cek-status-lacak) tanpa login
+- **Grafik & analitik** di dashboard admin: tren bulanan + breakdown per status (di samping breakdown teks yang sudah ada)
+- **Laporan Dekan** (`/report/laporan`): petugas bisa membuat laporan rekap gabungan Kotak Saran + Whistleblower untuk periode tertentu, siap cetak/simpan sebagai PDF — lihat [§ Laporan Dekan](#-laporan-dekan)
 - **Validasi inline** + character counter untuk masukan utama
 - **Dark / Light / System mode** dengan persist via `localStorage`
 - **Animated background blobs** + grid pattern
@@ -198,6 +202,32 @@ mencatat / menyalin ID untuk:
 - Mengirim bukti pendukung (foto/dokumen) ke email pengelola dengan subject
   yang menyebutkan Case ID.
 
+## 🖨️ Laporan Dekan
+
+Halaman `/report/laporan` (tab **"Laporan Dekan"** di dashboard admin) dipakai
+petugas untuk menyusun **laporan resmi rekap Kotak Saran & Whistleblower**
+yang diberikan ke Dekan FEB. Login pakai session yang sama dengan `/report`.
+
+Alur pemakaian:
+
+1. Pilih rentang tanggal (**Dari tanggal** / **Sampai tanggal**) — kosongkan
+   salah satu atau keduanya untuk mencakup seluruh data yang ada.
+2. Centang sumber data yang mau disertakan: **Kotak Saran**, **Whistleblower**,
+   atau keduanya (default: keduanya).
+3. Klik **Buat Laporan** — halaman menyusun dokumen dengan kop surat FEB,
+   ringkasan statistik (total, breakdown per status/peran/unit/kategori), dan
+   tabel daftar masukan/laporan pada periode tersebut, ditutup blok tanda
+   tangan untuk Dekan dan Petugas Pengelola.
+4. Klik **Cetak / Simpan PDF** untuk membuka dialog cetak browser — pilih
+   printer fisik atau "Save as PDF" untuk menyimpan filenya.
+
+Laporan dibuat sepenuhnya di sisi klien (fetch ke `/api/report/list` dan
+`/api/report/whistleblower/list` yang sudah ada, dengan filter tanggal yang
+sama seperti dashboard) — tidak ada endpoint atau penyimpanan tambahan.
+Karena memakai data yang sama dengan dashboard admin, isi laporan (termasuk
+detail laporan Whistleblower) mengikuti tingkat akses yang sama — jaga
+kerahasiaan file PDF yang dihasilkan sesuai kebijakan internal FEB.
+
 ## ☁️ Deploy ke Vercel
 
 1. Push repo ini ke GitHub.
@@ -236,7 +266,8 @@ src/
 │  ├─ report/
 │  │  ├─ login/page.tsx                 # Form login /report/login
 │  │  ├─ page.tsx                       # Dashboard rekap saran
-│  │  └─ whistleblower/page.tsx         # Dashboard rekap WB
+│  │  ├─ whistleblower/page.tsx         # Dashboard rekap WB
+│  │  └─ laporan/page.tsx               # Laporan cetak untuk Dekan
 │  ├─ whistleblower/
 │  │  ├─ page.tsx                       # Form publik laporan WB
 │  │  └─ terimakasih/page.tsx           # Halaman Case ID
@@ -250,6 +281,7 @@ src/
 │  ├─ report/
 │  │  ├─ report-dashboard.tsx           # Dashboard saran
 │  │  ├─ whistleblower-dashboard.tsx    # Dashboard WB
+│  │  ├─ laporan-dekan.tsx              # Laporan cetak gabungan untuk Dekan
 │  │  ├─ stat-card.tsx
 │  │  └─ breakdown-list.tsx
 │  ├─ progress-steps.tsx

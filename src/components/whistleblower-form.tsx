@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { FileUploadField } from "@/components/file-upload-field";
+import { uploadAttachments } from "@/lib/upload-client";
 import {
   ROLE_OPTIONS,
   UNIT_OPTIONS,
@@ -59,6 +61,7 @@ const INITIAL_STATE: FormState = {
 
 type SubmitStatus =
   | { kind: "idle" }
+  | { kind: "uploading" }
   | { kind: "submitting" }
   | { kind: "error"; message: string };
 
@@ -69,6 +72,7 @@ const KRONOLOGI_MAX = 5000;
 export function WhistleblowerForm() {
   const router = useRouter();
   const [state, setState] = React.useState<FormState>(INITIAL_STATE);
+  const [lampiranFiles, setLampiranFiles] = React.useState<File[]>([]);
   const [status, setStatus] = React.useState<SubmitStatus>({ kind: "idle" });
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
@@ -107,6 +111,24 @@ export function WhistleblowerForm() {
       setStatus({ kind: "error", message: check.message });
       return;
     }
+
+    let lampiran: Array<{ name: string; fileId: string }> | undefined;
+    if (lampiranFiles.length > 0) {
+      setStatus({ kind: "uploading" });
+      try {
+        lampiran = await uploadAttachments(lampiranFiles);
+      } catch (err) {
+        setStatus({
+          kind: "error",
+          message:
+            err instanceof Error
+              ? `Gagal upload lampiran: ${err.message}`
+              : "Gagal upload lampiran.",
+        });
+        return;
+      }
+    }
+
     setStatus({ kind: "submitting" });
     try {
       const payload = {
@@ -126,6 +148,7 @@ export function WhistleblowerForm() {
             : undefined,
         detail: state.detail.trim(),
         kronologi: state.kronologi.trim() || undefined,
+        lampiran,
       };
       const res = await fetch("/api/whistleblower", {
         method: "POST",
@@ -388,12 +411,19 @@ export function WhistleblowerForm() {
             rows={4}
             maxLength={KRONOLOGI_MAX}
           />
-          <p className="mt-1 text-xs text-muted-foreground">
-            Bukti file (foto/dokumen) dapat dikirim menyusul ke email pengelola
-            dengan menyertakan <strong>Case ID</strong> yang akan Anda terima
-            setelah kirim.
-          </p>
         </div>
+
+        <FileUploadField
+          files={lampiranFiles}
+          onChange={setLampiranFiles}
+          label="Lampiran bukti (opsional)"
+          hint="Foto atau dokumen pendukung — JPG, PNG, WEBP, atau PDF, maks 4MB/file."
+        />
+        <p className="text-xs text-muted-foreground">
+          Untuk bukti berformat lain (video, dsb.) yang tidak bisa diupload di
+          sini, bisa dikirim menyusul ke email pengelola dengan menyertakan{" "}
+          <strong>Case ID</strong> yang akan Anda terima setelah kirim.
+        </p>
       </fieldset>
 
       {/* Section 4: Pernyataan */}
@@ -428,10 +458,15 @@ export function WhistleblowerForm() {
       <Button
         type="submit"
         size="lg"
-        disabled={status.kind === "submitting"}
+        disabled={status.kind === "submitting" || status.kind === "uploading"}
         className="w-full bg-rose-600 text-white hover:bg-rose-700 sm:w-auto"
       >
-        {status.kind === "submitting" ? (
+        {status.kind === "uploading" ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Mengupload lampiran…
+          </>
+        ) : status.kind === "submitting" ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
             Mengirim laporan…

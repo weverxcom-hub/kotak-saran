@@ -10,6 +10,7 @@
  */
 
 import type { AnonimChoice, Role, Unit } from "@/lib/form-config";
+import type { AttachmentRef } from "@/lib/lampiran";
 
 export const WHISTLEBLOWER_CATEGORIES = [
   "Korupsi/Gratifikasi",
@@ -33,4 +34,6 @@ export type WhistleblowerPayload = {
   kontak?: string;
   detail: string;
   kronologi?: string;
+  /** Lampiran bukti — sudah diupload lewat /api/upload sebelum submit ini. */
+  lampiran?: AttachmentRef[];
 };

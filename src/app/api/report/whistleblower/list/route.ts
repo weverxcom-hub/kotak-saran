@@ -23,6 +23,7 @@ function buildFilters(searchParams: URLSearchParams): WhistleblowerFilters {
       mode === "Ya" || mode === "Tidak" || mode === "all"
         ? (mode as WhistleblowerFilters["mode"])
         : undefined,
+    status: get("status"),
     dateFrom: get("dateFrom"),
     dateTo: get("dateTo"),
   };

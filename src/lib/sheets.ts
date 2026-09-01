@@ -1,12 +1,23 @@
 import { google } from "googleapis";
+import { getGoogleCredentials, GoogleAuthConfigError } from "@/lib/google-auth";
+import { DEFAULT_STATUS, normalizeStatus } from "@/lib/status-config";
+import {
+  parseLampiran,
+  serializeLampiran,
+  type AttachmentRef,
+} from "@/lib/lampiran";
+
+// Re-export supaya konsumen server (routes) tetap bisa `import { parseLampiran }
+// from "@/lib/sheets"` — tapi komponen CLIENT harus impor langsung dari
+// "@/lib/lampiran" (bukan dari sini), karena file ini mengimpor `googleapis`
+// (Node-only) dan tidak boleh masuk ke bundle browser.
+export { parseLampiran, serializeLampiran };
+export type { AttachmentRef };
 
 /**
  * Klien Google Sheets API — baca dan tulis ke spreadsheet rekap masukan.
  *
- * Kredensial diambil dari environment:
- *   - GOOGLE_SERVICE_ACCOUNT_EMAIL
- *   - GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY (newline-encoded)
- *   - atau GOOGLE_SERVICE_ACCOUNT_JSON (JSON string utuh)
+ * Kredensial: lihat lib/google-auth.ts (dipakai bersama dengan lib/drive.ts).
  *
  * Service account harus diberi akses Editor pada spreadsheet target supaya
  * bisa append baris (untuk submission baru). Akses Viewer cukup untuk
@@ -14,7 +25,7 @@ import { google } from "googleapis";
  *
  * Spreadsheet target diatur via:
  *   - REPORT_SHEET_ID  → ID spreadsheet
- *   - REPORT_SHEET_RANGE → mis. "Sheet1!A:L" (default ke A:Z dari sheet pertama)
+ *   - REPORT_SHEET_RANGE → mis. "Sheet1!A:Q" (default ke A:Z dari sheet pertama)
  */
 
 export type RawRow = string[];
@@ -39,6 +50,12 @@ export type SubmissionRow = {
   masukan: string;
   kronologi: string;
   kontak: string;
+  // tindak lanjut (kolom M–Q)
+  trackingId: string;
+  lampiran: string; // raw serialized, parse via parseLampiran()
+  status: string;
+  catatanAdmin: string;
+  terakhirDiupdate: string;
 };
 
 export type SheetSchema = {
@@ -54,95 +71,14 @@ export class SheetsConfigError extends Error {
   }
 }
 
-/**
- * Normalisasi PEM private key dari env var. Berbagai host (Vercel di antaranya)
- * bisa mengirim value dalam bentuk yang tidak langsung dibaca OpenSSL:
- *  - Newline tersimpan sebagai literal "\n" (2 karakter) → ubah ke newline asli.
- *  - Line ending CRLF (\r\n) dari paste Windows → ubah ke LF (\n).
- *  - Newline dihilangkan total / diganti spasi (Vercel terkadang flatten
- *    multiline value saat disimpan dari UI) → rekonstruksi PEM dengan
- *    membungkus blok base64 jadi 64-char per baris sesuai RFC 7468.
- *  - Whitespace berlebih di awal/akhir → trim.
- *  - Akhiri dengan satu newline (beberapa parser PEM strict soal ini).
- *
- * Tanpa normalisasi ini, OpenSSL akan balas
- * "1E08010C:DECODER routines::unsupported" walau key terlihat valid.
- */
-function normalizePrivateKey(raw: string): string {
-  let key = raw
-    .replace(/\\n/g, "\n")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .trim();
-
-  // Kasus terburuk: nilai sudah kehilangan newline (Vercel UI dapat flatten
-  // multi-line value menjadi satu baris yang dipisah spasi). Selama header dan
-  // footer PEM masih ada, kita bisa membentuk ulang PEM dengan membungkus
-  // base64 jadi 64 karakter per baris.
-  const beginMatch = key.match(/-----BEGIN [A-Z0-9 ]+-----/);
-  const endMatch = key.match(/-----END [A-Z0-9 ]+-----/);
-  if (beginMatch && endMatch) {
-    const header = beginMatch[0];
-    const footer = endMatch[0];
-    const headerEnd = (beginMatch.index ?? 0) + header.length;
-    const footerStart = endMatch.index ?? key.length;
-    if (headerEnd < footerStart) {
-      const middle = key.slice(headerEnd, footerStart);
-      // Hapus SEMUA whitespace dalam blok base64, lalu wrap ulang per 64 char.
-      const base64 = middle.replace(/\s+/g, "");
-      if (base64.length > 0) {
-        const wrapped = base64.match(/.{1,64}/g)?.join("\n") ?? base64;
-        key = `${header}\n${wrapped}\n${footer}`;
-      }
-    }
-  }
-
-  return key + "\n";
-}
-
-function getCredentials() {
-  const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (json) {
-    let parsed: { client_email?: string; private_key?: string };
-    try {
-      parsed = JSON.parse(json);
-    } catch (e) {
-      throw new SheetsConfigError(
-        "GOOGLE_SERVICE_ACCOUNT_JSON tidak valid JSON. Pastikan value adalah single-line JSON (gunakan `jq -c .` atau pakai env var split GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY).",
-      );
-    }
-    if (!parsed.client_email || !parsed.private_key) {
-      throw new SheetsConfigError(
-        "GOOGLE_SERVICE_ACCOUNT_JSON tidak punya client_email/private_key. Cek isi JSON-nya.",
-      );
-    }
-    parsed.private_key = normalizePrivateKey(parsed.private_key);
-    if (!parsed.private_key.startsWith("-----BEGIN")) {
-      throw new SheetsConfigError(
-        "private_key di GOOGLE_SERVICE_ACCOUNT_JSON tidak dimulai dengan '-----BEGIN'. Mungkin newline di-escape rusak.",
-      );
-    }
-    return parsed;
-  }
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
-  let privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-  if (!email || !privateKey) {
-    throw new SheetsConfigError(
-      "Service account belum dikonfigurasi. Set GOOGLE_SERVICE_ACCOUNT_JSON atau GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY.",
-    );
-  }
-  privateKey = normalizePrivateKey(privateKey);
-  if (!privateKey.startsWith("-----BEGIN")) {
-    throw new SheetsConfigError(
-      "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY tidak dimulai dengan '-----BEGIN PRIVATE KEY-----'. " +
-        "Cek lagi: paste UTUH dari header `-----BEGIN PRIVATE KEY-----` sampai footer `-----END PRIVATE KEY-----` (boleh multiline; \\n literal juga didukung).",
-    );
-  }
-  return { client_email: email, private_key: privateKey };
-}
-
 function getSheetsClient(scope: "read" | "write" = "read") {
-  const creds = getCredentials();
+  let creds;
+  try {
+    creds = getGoogleCredentials();
+  } catch (e) {
+    if (e instanceof GoogleAuthConfigError) throw new SheetsConfigError(e.message);
+    throw e;
+  }
   const auth = new google.auth.JWT({
     email: creds.client_email,
     key: creds.private_key,
@@ -164,6 +100,90 @@ function getConfig() {
   }
   const range = process.env.REPORT_SHEET_RANGE || "A:Z";
   return { sheetId, range };
+}
+
+/** Konversi indeks kolom 1-based → huruf A1 notation (1→A, 17→Q, 27→AA). */
+function colLetter(n: number): string {
+  let s = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+/**
+ * Migrasi header self-healing. Google Sheets API memotong setiap row
+ * (termasuk header) sampai sel non-kosong terakhir — kalau kode nambah
+ * kolom baru tapi header row di spreadsheet lama belum diperpanjang, kolom
+ * baru akan selalu terbaca "" walau append sudah menulis data di sana.
+ *
+ * Dipanggil di awal setiap append: cek header saat ini, tambahkan header
+ * yang belum ada (tanpa menyentuh yang sudah ada). Idempoten & murah (satu
+ * `values.get` kecil per submission).
+ *
+ * `rangePrefix`: "" untuk Kotak Saran (sengaja tanpa nama sheet — kode ini
+ * dari awal didesain supaya jalan di "sheet pertama apa pun namanya"),
+ * atau "Whistleblower!" untuk tab Whistleblower.
+ */
+async function ensureHeaderColumns(
+  rangePrefix: string,
+  requiredHeaders: readonly string[],
+): Promise<void> {
+  const { sheetId } = getConfig();
+  const sheets = getSheetsClient("write");
+  const lastCol = colLetter(requiredHeaders.length);
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: `${rangePrefix}A1:${lastCol}1`,
+  });
+  const current = (res.data.values?.[0] as string[] | undefined) ?? [];
+  if (current.length >= requiredHeaders.length) return;
+  const missing = requiredHeaders.slice(current.length);
+  const startCol = colLetter(current.length + 1);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${rangePrefix}${startCol}1:${lastCol}1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [missing] },
+  });
+}
+
+/** Header lengkap Kotak Saran (17 kolom A–Q) — dipakai untuk self-healing migration. */
+export const KOTAK_SARAN_HEADERS = [
+  "Timestamp",
+  "Saudara adalah",
+  "Unit kerja / Prodi",
+  "Apakah Anonim?",
+  "Nama (jika identitas)",
+  "NIM/NIP (jika identitas)",
+  "Masukan (identitas)",
+  "Kronologi (identitas)",
+  "Kontak (identitas)",
+  "Masukan (anonim)",
+  "Kronologi (anonim)",
+  "Kontak (anonim)",
+  "Tracking ID",
+  "Lampiran",
+  "Status",
+  "Catatan untuk Pelapor",
+  "Terakhir Diupdate",
+] as const;
+
+/** Format kode tracking bersama Kotak Saran (KS-) & Whistleblower (WB-). */
+function generateTrackingId(prefix: "KS" | "WB", now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const y = now.getFullYear();
+  const m = pad(now.getMonth() + 1);
+  const d = pad(now.getDate());
+  // 6-char base36 random suffix (~2.2 miliar kombinasi per hari) — cukup
+  // sulit ditebak untuk endpoint publik /api/lacak yang tidak di-rate-limit.
+  const rand = Math.floor(Math.random() * 36 ** 6)
+    .toString(36)
+    .toUpperCase()
+    .padStart(6, "0");
+  return `${prefix}-${y}${m}${d}-${rand}`;
 }
 
 /**
@@ -192,6 +212,11 @@ const HEADER_PATTERNS: Array<[keyof SubmissionRow, RegExp[]]> = [
   ["masukanAnonim", [/masukan.*anonim|saran.*anonim/i]],
   ["kronologiAnonim", [/kronologi.*anonim|kejadian.*anonim/i]],
   ["kontakAnonim", [/kontak.*anonim|wa.*anonim|telepon.*anonim/i]],
+  ["trackingId", [/tracking\s*id|kode\s*lacak/i]],
+  ["lampiran", [/lampiran|bukti\s*file/i]],
+  ["status", [/^status/i]],
+  ["catatanAdmin", [/catatan/i]],
+  ["terakhirDiupdate", [/terakhir\s*diupdate|update\s*terakhir/i]],
 ];
 
 function buildColumnMap(headers: string[]): Record<keyof SubmissionRow, number> {
@@ -214,6 +239,11 @@ function buildColumnMap(headers: string[]): Record<keyof SubmissionRow, number> 
   //   9: Masukan (anonim)
   //  10: Kronologi (anonim)
   //  11: Kontak (anonim)
+  //  12: Tracking ID
+  //  13: Lampiran
+  //  14: Status
+  //  15: Catatan untuk Pelapor
+  //  16: Terakhir Diupdate
   const FALLBACK: Array<[keyof SubmissionRow, number]> = [
     ["timestamp", 0],
     ["saudaraAdalah", 1],
@@ -227,6 +257,11 @@ function buildColumnMap(headers: string[]): Record<keyof SubmissionRow, number> 
     ["masukanAnonim", 9],
     ["kronologiAnonim", 10],
     ["kontakAnonim", 11],
+    ["trackingId", 12],
+    ["lampiran", 13],
+    ["status", 14],
+    ["catatanAdmin", 15],
+    ["terakhirDiupdate", 16],
   ];
   for (const [field, idx] of FALLBACK) {
     if (map[field] === undefined && idx < headers.length) map[field] = idx;
@@ -305,6 +340,12 @@ export async function fetchSubmissions(): Promise<SubmissionRow[]> {
       masukan: masukanIdentitas || masukanAnonim,
       kronologi: get("kronologiIdentitas") || get("kronologiAnonim"),
       kontak: get("kontakIdentitas") || get("kontakAnonim"),
+      // tindak lanjut
+      trackingId: get("trackingId"),
+      lampiran: get("lampiran"),
+      status: normalizeStatus(get("status")),
+      catatanAdmin: get("catatanAdmin"),
+      terakhirDiupdate: get("terakhirDiupdate"),
     });
   }
   return out;
@@ -315,6 +356,7 @@ export type Filters = {
   role?: string;
   unit?: string;
   mode?: "Ya" | "Tidak" | "all";
+  status?: string;
   dateFrom?: string; // YYYY-MM-DD
   dateTo?: string; // YYYY-MM-DD
 };
@@ -332,6 +374,8 @@ export function applyFilters(
     if (filters.role && filters.role !== "all" && r.saudaraAdalah !== filters.role)
       return false;
     if (filters.unit && filters.unit !== "all" && r.unitKerja !== filters.unit)
+      return false;
+    if (filters.status && filters.status !== "all" && r.status !== filters.status)
       return false;
     if (filters.mode && filters.mode !== "all") {
       // Normalisasi: Google Form bisa simpan "Ya" / "Tidak" atau "Anonim" / "Identitas"
@@ -354,6 +398,7 @@ export function applyFilters(
         r.masukan,
         r.kronologi,
         r.kontak,
+        r.trackingId,
       ]
         .join(" ")
         .toLowerCase();
@@ -388,10 +433,11 @@ export type AppendPayload = {
   masukan: string;
   kronologi?: string;
   kontak?: string;
+  lampiran?: AttachmentRef[];
 };
 
 /**
- * Append satu baris ke spreadsheet rekap. Skema kolom (12 kolom):
+ * Append satu baris ke spreadsheet rekap. Skema kolom (17 kolom A–Q):
  *   A Timestamp
  *   B Saudara adalah
  *   C Unit kerja / Prodi
@@ -404,14 +450,24 @@ export type AppendPayload = {
  *   J Masukan (anonim)
  *   K Kronologi (anonim)
  *   L Kontak (anonim)
+ *   M Tracking ID       (KS-YYYYMMDD-XXXXXX, di-generate server)
+ *   N Lampiran          ("nama :: driveFileId" per baris)
+ *   O Status            (Baru / Diproses / Selesai / Ditolak)
+ *   P Catatan untuk Pelapor (tampil publik via /lacak)
+ *   Q Terakhir Diupdate
  *
  * Service account butuh akses Editor pada spreadsheet target.
  */
-export async function appendSubmission(payload: AppendPayload): Promise<void> {
+export async function appendSubmission(
+  payload: AppendPayload,
+): Promise<{ trackingId: string; timestamp: string }> {
+  await ensureHeaderColumns("", KOTAK_SARAN_HEADERS);
   const { sheetId } = getConfig();
   const sheets = getSheetsClient("write");
   const isAnonim = payload.isAnonim === "Ya";
-  const timestamp = formatIndonesianTimestamp(new Date());
+  const now = new Date();
+  const timestamp = formatIndonesianTimestamp(now);
+  const trackingId = generateTrackingId("KS", now);
   const row = [
     timestamp, // A
     payload.saudaraAdalah, // B
@@ -425,14 +481,38 @@ export async function appendSubmission(payload: AppendPayload): Promise<void> {
     isAnonim ? payload.masukan : "", // J
     isAnonim ? (payload.kronologi ?? "") : "", // K
     isAnonim ? (payload.kontak ?? "") : "", // L
+    trackingId, // M
+    serializeLampiran(payload.lampiran ?? []), // N
+    DEFAULT_STATUS, // O
+    "", // P catatan untuk pelapor
+    "", // Q terakhir diupdate
   ];
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: "A:L",
+    range: "A:Q",
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody: { values: [row] },
   });
+  return { trackingId, timestamp };
+}
+
+/** Update status + catatan untuk satu baris Kotak Saran (kolom O:Q). */
+export async function updateSubmissionStatus(
+  rowIndex: number,
+  status: string,
+  catatan: string,
+): Promise<{ terakhirDiupdate: string }> {
+  const { sheetId } = getConfig();
+  const sheets = getSheetsClient("write");
+  const timestamp = formatIndonesianTimestamp(new Date());
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `O${rowIndex}:Q${rowIndex}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[status, catatan, timestamp]] },
+  });
+  return { terakhirDiupdate: timestamp };
 }
 
 export type Stats = {
@@ -441,6 +521,7 @@ export type Stats = {
   identitas: number;
   perRole: Record<string, number>;
   perUnit: Record<string, number>;
+  perStatus: Record<string, number>;
   perMonth: Array<{ month: string; count: number }>;
 };
 
@@ -448,9 +529,9 @@ export type Stats = {
 // Whistleblower (laporan pelanggaran)
 //
 // Disimpan di TAB TERPISAH bernama "Whistleblower" pada spreadsheet yang
-// sama. Skema kolom (12 kolom A–L):
+// sama. Skema kolom (16 kolom A–P):
 //   A Timestamp
-//   B Case ID            (WB-YYYYMMDD-XXXX, di-generate server)
+//   B Case ID            (WB-YYYYMMDD-XXXXXX, di-generate server)
 //   C Kategori
 //   D Saudara adalah
 //   E Unit kerja / Prodi
@@ -461,6 +542,10 @@ export type Stats = {
 //   J Kontak             (kalau identitas)
 //   K Detail Pelaporan
 //   L Kronologi & Bukti
+//   M Lampiran           ("nama :: driveFileId" per baris)
+//   N Status             (Baru / Diproses / Selesai / Ditolak)
+//   O Catatan untuk Pelapor (tampil publik via /lacak)
+//   P Terakhir Diupdate
 //
 // Untuk WB, kolom Detail (K) dan Kronologi (L) selalu terisi tanpa
 // peduli mode anonim — yang ditahan hanya kolom identitas H/I/J.
@@ -481,6 +566,10 @@ export const WHISTLEBLOWER_HEADERS = [
   "Kontak (jika identitas)",
   "Detail Pelaporan",
   "Kronologi & Bukti",
+  "Lampiran",
+  "Status",
+  "Catatan untuk Pelapor",
+  "Terakhir Diupdate",
 ] as const;
 
 export type WhistleblowerRow = {
@@ -497,6 +586,10 @@ export type WhistleblowerRow = {
   kontak: string;
   detail: string;
   kronologi: string;
+  lampiran: string; // raw serialized, parse via parseLampiran()
+  status: string;
+  catatanAdmin: string;
+  terakhirDiupdate: string;
 };
 
 export type WhistleblowerStats = {
@@ -505,6 +598,7 @@ export type WhistleblowerStats = {
   identitas: number;
   perKategori: Record<string, number>;
   perUnit: Record<string, number>;
+  perStatus: Record<string, number>;
   perMonth: Array<{ month: string; count: number }>;
 };
 
@@ -519,12 +613,14 @@ export type WhistleblowerAppendPayload = {
   kontak?: string;
   detail: string;
   kronologi?: string;
+  lampiran?: AttachmentRef[];
 };
 
 /**
  * Cek apakah tab "Whistleblower" sudah ada di spreadsheet. Kalau belum,
  * tambahkan sheet baru lengkap dengan baris header. Idempoten — kalau
- * sheet sudah ada, fungsi ini no-op.
+ * sheet sudah ada, fungsi ini no-op (self-healing header untuk tab yang
+ * SUDAH ada ditangani terpisah oleh ensureHeaderColumns()).
  */
 async function ensureWhistleblowerSheet(): Promise<void> {
   const { sheetId } = getConfig();
@@ -564,20 +660,6 @@ async function ensureWhistleblowerSheet(): Promise<void> {
   });
 }
 
-function generateCaseId(now: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const y = now.getFullYear();
-  const m = pad(now.getMonth() + 1);
-  const d = pad(now.getDate());
-  // 4-char base36 random suffix, agar pendek tapi cukup unik untuk
-  // mencegah collision pada submission yang sangat dekat (per-detik).
-  const rand = Math.floor(Math.random() * 36 ** 4)
-    .toString(36)
-    .toUpperCase()
-    .padStart(4, "0");
-  return `WB-${y}${m}${d}-${rand}`;
-}
-
 /**
  * Append satu baris laporan whistleblower ke tab "Whistleblower". Auto
  * create tab kalau belum ada. Mengembalikan Case ID yang ter-generate.
@@ -586,12 +668,14 @@ export async function appendWhistleblowerReport(
   payload: WhistleblowerAppendPayload,
 ): Promise<{ caseId: string; timestamp: string }> {
   await ensureWhistleblowerSheet();
+  // Self-heal header untuk tab yang sudah ada dari sebelum kolom M–P ditambahkan.
+  await ensureHeaderColumns(`${WHISTLEBLOWER_SHEET_NAME}!`, WHISTLEBLOWER_HEADERS);
   const { sheetId } = getConfig();
   const sheets = getSheetsClient("write");
   const now = new Date();
   const isAnonim = payload.isAnonim === "Ya";
   const timestamp = formatIndonesianTimestamp(now);
-  const caseId = generateCaseId(now);
+  const caseId = generateTrackingId("WB", now);
   const row = [
     timestamp, // A
     caseId, // B
@@ -605,15 +689,37 @@ export async function appendWhistleblowerReport(
     isAnonim ? "" : (payload.kontak ?? ""), // J
     payload.detail, // K
     payload.kronologi ?? "", // L
+    serializeLampiran(payload.lampiran ?? []), // M
+    DEFAULT_STATUS, // N
+    "", // O catatan untuk pelapor
+    "", // P terakhir diupdate
   ];
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: `${WHISTLEBLOWER_SHEET_NAME}!A:L`,
+    range: `${WHISTLEBLOWER_SHEET_NAME}!A:P`,
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody: { values: [row] },
   });
   return { caseId, timestamp };
+}
+
+/** Update status + catatan untuk satu baris Whistleblower (kolom N:P). */
+export async function updateWhistleblowerStatus(
+  rowIndex: number,
+  status: string,
+  catatan: string,
+): Promise<{ terakhirDiupdate: string }> {
+  const { sheetId } = getConfig();
+  const sheets = getSheetsClient("write");
+  const timestamp = formatIndonesianTimestamp(new Date());
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${WHISTLEBLOWER_SHEET_NAME}!N${rowIndex}:P${rowIndex}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[status, catatan, timestamp]] },
+  });
+  return { terakhirDiupdate: timestamp };
 }
 
 export async function fetchWhistleblowerReports(): Promise<WhistleblowerRow[]> {
@@ -623,7 +729,7 @@ export async function fetchWhistleblowerReports(): Promise<WhistleblowerRow[]> {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: `${WHISTLEBLOWER_SHEET_NAME}!A:L`,
+      range: `${WHISTLEBLOWER_SHEET_NAME}!A:P`,
       valueRenderOption: "FORMATTED_VALUE",
     });
     const values = (res.data.values as RawRow[] | undefined) ?? [];
@@ -648,6 +754,10 @@ export async function fetchWhistleblowerReports(): Promise<WhistleblowerRow[]> {
         kontak: cell(9),
         detail: cell(10),
         kronologi: cell(11),
+        lampiran: cell(12),
+        status: normalizeStatus(cell(13)),
+        catatanAdmin: cell(14),
+        terakhirDiupdate: cell(15),
       });
     }
     return out;
@@ -667,6 +777,7 @@ export type WhistleblowerFilters = {
   kategori?: string;
   unit?: string;
   mode?: "Ya" | "Tidak" | "all";
+  status?: string;
   dateFrom?: string;
   dateTo?: string;
 };
@@ -688,6 +799,8 @@ export function applyWhistleblowerFilters(
     )
       return false;
     if (filters.unit && filters.unit !== "all" && r.unitKerja !== filters.unit)
+      return false;
+    if (filters.status && filters.status !== "all" && r.status !== filters.status)
       return false;
     if (filters.mode && filters.mode !== "all") {
       const isAnonim = /ya|anonim/i.test(r.isAnonim);
@@ -726,6 +839,7 @@ export function computeWhistleblowerStats(
 ): WhistleblowerStats {
   const perKategori: Record<string, number> = {};
   const perUnit: Record<string, number> = {};
+  const perStatus: Record<string, number> = {};
   const perMonthMap = new Map<string, number>();
   let anonim = 0;
   for (const r of rows) {
@@ -733,6 +847,8 @@ export function computeWhistleblowerStats(
     perKategori[kat] = (perKategori[kat] ?? 0) + 1;
     const unit = r.unitKerja || "(tidak diisi)";
     perUnit[unit] = (perUnit[unit] ?? 0) + 1;
+    const status = normalizeStatus(r.status);
+    perStatus[status] = (perStatus[status] ?? 0) + 1;
     if (/ya|anonim/i.test(r.isAnonim)) anonim++;
     if (r.timestamp) {
       const d = new Date(r.timestamp);
@@ -751,6 +867,7 @@ export function computeWhistleblowerStats(
     identitas: rows.length - anonim,
     perKategori,
     perUnit,
+    perStatus,
     perMonth,
   };
 }
@@ -758,6 +875,7 @@ export function computeWhistleblowerStats(
 export function computeStats(rows: SubmissionRow[]): Stats {
   const perRole: Record<string, number> = {};
   const perUnit: Record<string, number> = {};
+  const perStatus: Record<string, number> = {};
   const perMonthMap = new Map<string, number>();
   let anonim = 0;
   for (const r of rows) {
@@ -765,6 +883,8 @@ export function computeStats(rows: SubmissionRow[]): Stats {
     perRole[role] = (perRole[role] ?? 0) + 1;
     const unit = r.unitKerja || "(tidak diisi)";
     perUnit[unit] = (perUnit[unit] ?? 0) + 1;
+    const status = normalizeStatus(r.status);
+    perStatus[status] = (perStatus[status] ?? 0) + 1;
     if (/ya|anonim/i.test(r.isAnonim)) anonim++;
     if (r.timestamp) {
       const d = new Date(r.timestamp);
@@ -783,6 +903,54 @@ export function computeStats(rows: SubmissionRow[]): Stats {
     identitas: rows.length - anonim,
     perRole,
     perUnit,
+    perStatus,
     perMonth,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Lacak status publik (/api/lacak) — lookup lintas kedua sheet berdasarkan
+// prefix kode (KS- → Kotak Saran, WB- → Whistleblower). Response sengaja
+// minim: tidak ada field PII apa pun (nama/nim/kontak/isi masukan/lampiran).
+// ─────────────────────────────────────────────────────────────────────
+
+export type TrackingLookupResult = {
+  trackingId: string;
+  status: string;
+  catatanAdmin: string;
+  submittedAt: string;
+  updatedAt: string;
+  kategori?: string;
+};
+
+export async function lookupTrackingCode(
+  code: string,
+): Promise<TrackingLookupResult | null> {
+  const normalized = code.trim().toUpperCase();
+  if (normalized.startsWith("KS-")) {
+    const rows = await fetchSubmissions();
+    const row = rows.find((r) => r.trackingId.toUpperCase() === normalized);
+    if (!row) return null;
+    return {
+      trackingId: row.trackingId,
+      status: row.status,
+      catatanAdmin: row.catatanAdmin,
+      submittedAt: row.timestamp,
+      updatedAt: row.terakhirDiupdate,
+    };
+  }
+  if (normalized.startsWith("WB-")) {
+    const rows = await fetchWhistleblowerReports();
+    const row = rows.find((r) => r.caseId.toUpperCase() === normalized);
+    if (!row) return null;
+    return {
+      trackingId: row.caseId,
+      status: row.status,
+      catatanAdmin: row.catatanAdmin,
+      submittedAt: row.timestamp,
+      updatedAt: row.terakhirDiupdate,
+      kategori: row.kategori,
+    };
+  }
+  return null;
 }

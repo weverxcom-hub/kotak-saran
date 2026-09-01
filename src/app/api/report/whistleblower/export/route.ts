@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import {
   applyWhistleblowerFilters,
   fetchWhistleblowerReports,
+  parseLampiran,
   SheetsConfigError,
   type WhistleblowerFilters,
   type WhistleblowerRow,
@@ -23,6 +24,7 @@ function buildFilters(searchParams: URLSearchParams): WhistleblowerFilters {
       mode === "Ya" || mode === "Tidak" || mode === "all"
         ? (mode as WhistleblowerFilters["mode"])
         : undefined,
+    status: get("status"),
     dateFrom: get("dateFrom"),
     dateTo: get("dateTo"),
   };
@@ -41,6 +43,10 @@ const COLUMNS: Array<[string, (r: WhistleblowerRow) => string]> = [
   ["Kontak", (r) => r.kontak],
   ["Detail Pelaporan", (r) => r.detail],
   ["Kronologi & Bukti", (r) => r.kronologi],
+  ["Lampiran", (r) => parseLampiran(r.lampiran).map((a) => a.name).join("; ")],
+  ["Status", (r) => r.status],
+  ["Catatan untuk Pelapor", (r) => r.catatanAdmin],
+  ["Terakhir Diupdate", (r) => r.terakhirDiupdate],
 ];
 
 function csvEscape(value: string): string {

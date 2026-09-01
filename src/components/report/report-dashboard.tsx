@@ -27,7 +27,13 @@ import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { StatCard } from "@/components/report/stat-card";
 import { BreakdownList } from "@/components/report/breakdown-list";
+import { TrendChart } from "@/components/report/trend-chart";
+import { BreakdownChart } from "@/components/report/breakdown-chart";
+import { StatusBadge } from "@/components/report/status-badge";
+import { StatusEditor } from "@/components/report/status-editor";
+import { AttachmentList } from "@/components/report/attachment-list";
 import { ROLE_OPTIONS, UNIT_OPTIONS } from "@/lib/form-config";
+import { STATUS_OPTIONS } from "@/lib/status-config";
 import type { SubmissionRow, Stats } from "@/lib/sheets";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +42,7 @@ type Filters = {
   role: string;
   unit: string;
   mode: "all" | "Ya" | "Tidak";
+  status: string;
   dateFrom: string;
   dateTo: string;
 };
@@ -45,6 +52,7 @@ const DEFAULT_FILTERS: Filters = {
   role: "all",
   unit: "all",
   mode: "all",
+  status: "all",
   dateFrom: "",
   dateTo: "",
 };
@@ -69,6 +77,7 @@ function buildQuery(f: Filters): string {
   if (f.role !== "all") sp.set("role", f.role);
   if (f.unit !== "all") sp.set("unit", f.unit);
   if (f.mode !== "all") sp.set("mode", f.mode);
+  if (f.status !== "all") sp.set("status", f.status);
   if (f.dateFrom) sp.set("dateFrom", f.dateFrom);
   if (f.dateTo) sp.set("dateTo", f.dateTo);
   return sp.toString();
@@ -174,6 +183,7 @@ export function ReportDashboard() {
     filters.role !== "all" ||
     filters.unit !== "all" ||
     filters.mode !== "all" ||
+    filters.status !== "all" ||
     filters.dateFrom !== "" ||
     filters.dateTo !== "";
 
@@ -341,6 +351,26 @@ export function ReportDashboard() {
           </div>
 
           <div>
+            <Label htmlFor="status" className="mb-1.5 block text-xs">
+              Status
+            </Label>
+            <Select
+              id="status"
+              value={filters.status}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, status: e.target.value }))
+              }
+            >
+              <option value="all">Semua</option>
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div>
             <Label htmlFor="from" className="mb-1.5 block text-xs">
               Dari tanggal
             </Label>
@@ -406,6 +436,18 @@ export function ReportDashboard() {
           </Button>
         </div>
       </section>
+
+      {/* Grafik & Analitik */}
+      {load.kind === "ready" && load.stats.total > 0 ? (
+        <section className="grid gap-4 lg:grid-cols-2">
+          <TrendChart data={load.stats.perMonth} />
+          <BreakdownChart
+            title="Per Status Tindak Lanjut"
+            items={Object.entries(load.stats.perStatus)}
+            total={load.stats.total}
+          />
+        </section>
+      ) : null}
 
       {/* Breakdown */}
       {load.kind === "ready" && load.stats.total > 0 ? (
@@ -489,6 +531,7 @@ export function ReportDashboard() {
                       Unit / Prodi
                     </th>
                     <th className="px-4 py-3 text-left font-medium">Mode</th>
+                    <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-left font-medium">Nama</th>
                     <th className="px-4 py-3 text-left font-medium">Masukan</th>
                   </tr>
@@ -524,6 +567,9 @@ export function ReportDashboard() {
                               </span>
                             )}
                           </td>
+                          <td className="px-4 py-3">
+                            <StatusBadge status={r.status} />
+                          </td>
                           <td className="px-4 py-3 text-foreground">
                             {isAnonim ? (
                               <span className="text-muted-foreground">
@@ -541,8 +587,11 @@ export function ReportDashboard() {
                         </tr>
                         {open ? (
                           <tr className="bg-muted/20">
-                            <td colSpan={6} className="px-4 py-4">
-                              <DetailPanel row={r} />
+                            <td colSpan={7} className="px-4 py-4">
+                              <DetailPanel
+                                row={r}
+                                onStatusSaved={fetchData}
+                              />
                             </td>
                           </tr>
                         ) : null}
@@ -578,6 +627,7 @@ export function ReportDashboard() {
                               <ShieldCheck className="h-3 w-3" /> Identitas
                             </span>
                           )}
+                          <StatusBadge status={r.status} />
                         </div>
                         <ChevronDown
                           className={cn(
@@ -607,7 +657,7 @@ export function ReportDashboard() {
                     </button>
                     {open ? (
                       <div className="mt-3 rounded-lg border border-border bg-background/60 p-3">
-                        <DetailPanel row={r} />
+                        <DetailPanel row={r} onStatusSaved={fetchData} />
                       </div>
                     ) : null}
                   </li>
@@ -687,57 +737,77 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
-function DetailPanel({ row }: { row: SubmissionRow }) {
+function DetailPanel({
+  row,
+  onStatusSaved,
+}: {
+  row: SubmissionRow;
+  onStatusSaved: () => void;
+}) {
   const isAnonim = /ya|anonim/i.test(row.isAnonim);
   return (
-    <dl className="grid gap-3 text-sm sm:grid-cols-2">
-      <Field label="Waktu masuk" value={formatDateTime(row.timestamp)} />
-      <Field
-        label="Mode"
-        value={
-          isAnonim ? (
-            <span className="text-accent">Anonim</span>
-          ) : (
-            <span className="text-success">Identitas</span>
-          )
-        }
-      />
-      <Field label="Peran" value={row.saudaraAdalah || "—"} />
-      <Field
-        label="Unit / Prodi"
-        value={
-          <span className="inline-flex items-center gap-1.5">
-            <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
-            {row.unitKerja || "—"}
-          </span>
-        }
-      />
-      {!isAnonim ? (
-        <>
-          <Field label="Nama" value={row.nama || "—"} />
-          <Field label="NIM / NIP" value={row.nim || "—"} />
-        </>
-      ) : null}
-      <Field
-        label="Masukan / saran"
-        value={row.masukan || "—"}
-        className="sm:col-span-2"
-      />
-      {row.kronologi ? (
+    <div className="space-y-4">
+      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+        <Field label="Tracking ID" value={row.trackingId || "—"} />
+        <Field label="Waktu masuk" value={formatDateTime(row.timestamp)} />
         <Field
-          label="Kronologi kejadian"
-          value={row.kronologi}
+          label="Mode"
+          value={
+            isAnonim ? (
+              <span className="text-accent">Anonim</span>
+            ) : (
+              <span className="text-success">Identitas</span>
+            )
+          }
+        />
+        <Field label="Peran" value={row.saudaraAdalah || "—"} />
+        <Field
+          label="Unit / Prodi"
+          value={
+            <span className="inline-flex items-center gap-1.5">
+              <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+              {row.unitKerja || "—"}
+            </span>
+          }
+        />
+        {!isAnonim ? (
+          <>
+            <Field label="Nama" value={row.nama || "—"} />
+            <Field label="NIM / NIP" value={row.nim || "—"} />
+          </>
+        ) : null}
+        <Field
+          label="Masukan / saran"
+          value={row.masukan || "—"}
           className="sm:col-span-2"
         />
-      ) : null}
-      {row.kontak ? (
-        <Field
-          label="Kontak (sukarela)"
-          value={row.kontak}
-          className="sm:col-span-2"
-        />
-      ) : null}
-    </dl>
+        {row.kronologi ? (
+          <Field
+            label="Kronologi kejadian"
+            value={row.kronologi}
+            className="sm:col-span-2"
+          />
+        ) : null}
+        {row.kontak ? (
+          <Field
+            label="Kontak (sukarela)"
+            value={row.kontak}
+            className="sm:col-span-2"
+          />
+        ) : null}
+        <div className="sm:col-span-2">
+          <AttachmentList raw={row.lampiran} />
+        </div>
+      </dl>
+
+      <StatusEditor
+        endpoint="/api/report/update-status"
+        rowIndex={row.rowIndex}
+        currentStatus={row.status}
+        currentCatatan={row.catatanAdmin}
+        onSaved={onStatusSaved}
+      />
+    </div>
   );
 }
 

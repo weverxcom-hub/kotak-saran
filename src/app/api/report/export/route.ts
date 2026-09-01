@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import {
   applyFilters,
   fetchSubmissions,
+  parseLampiran,
   SheetsConfigError,
   type Filters,
   type SubmissionRow,
@@ -23,6 +24,7 @@ function buildFilters(searchParams: URLSearchParams): Filters {
       mode === "Ya" || mode === "Tidak" || mode === "all"
         ? (mode as Filters["mode"])
         : undefined,
+    status: get("status"),
     dateFrom: get("dateFrom"),
     dateTo: get("dateTo"),
   };
@@ -30,6 +32,7 @@ function buildFilters(searchParams: URLSearchParams): Filters {
 
 const COLUMNS: Array<[string, (r: SubmissionRow) => string]> = [
   ["Waktu", (r) => r.timestamp],
+  ["Tracking ID", (r) => r.trackingId],
   ["Peran", (r) => r.saudaraAdalah],
   ["Unit/Prodi", (r) => r.unitKerja],
   ["Anonim?", (r) => (/ya|anonim/i.test(r.isAnonim) ? "Ya" : "Tidak")],
@@ -38,6 +41,10 @@ const COLUMNS: Array<[string, (r: SubmissionRow) => string]> = [
   ["Masukan", (r) => r.masukan],
   ["Kronologi", (r) => r.kronologi],
   ["Kontak", (r) => r.kontak],
+  ["Lampiran", (r) => parseLampiran(r.lampiran).map((a) => a.name).join("; ")],
+  ["Status", (r) => r.status],
+  ["Catatan untuk Pelapor", (r) => r.catatanAdmin],
+  ["Terakhir Diupdate", (r) => r.terakhirDiupdate],
 ];
 
 function csvEscape(value: string): string {

@@ -7,12 +7,35 @@ import {
 import {
   appendWhistleblowerReport,
   SheetsConfigError,
+  type AttachmentRef,
 } from "@/lib/sheets";
 
 export const runtime = "nodejs";
 
+const MAX_LAMPIRAN = 3;
+
 function isString(v: unknown): v is string {
   return typeof v === "string";
+}
+
+function validateLampiran(input: unknown): AttachmentRef[] | { error: string } {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) return { error: "Format lampiran tidak valid." };
+  if (input.length > MAX_LAMPIRAN) {
+    return { error: `Maksimal ${MAX_LAMPIRAN} lampiran per pengiriman.` };
+  }
+  const out: AttachmentRef[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") return { error: "Format lampiran tidak valid." };
+    const obj = item as Record<string, unknown>;
+    const name = isString(obj.name) ? obj.name.trim() : "";
+    const fileId = isString(obj.fileId) ? obj.fileId.trim() : "";
+    if (!fileId || !name || name.length > 200 || fileId.length > 200) {
+      return { error: "Format lampiran tidak valid." };
+    }
+    out.push({ name, fileId });
+  }
+  return out;
 }
 
 function validate(input: unknown): WhistleblowerPayload | { error: string } {
@@ -74,6 +97,9 @@ function validate(input: unknown): WhistleblowerPayload | { error: string } {
   if (pihakTerlibat.length > 500)
     return { error: "Pihak terlibat terlalu panjang." };
 
+  const lampiran = validateLampiran(body.lampiran);
+  if ("error" in lampiran) return lampiran;
+
   return {
     saudaraAdalah,
     unitKerja: unitKerja as (typeof UNIT_OPTIONS)[number],
@@ -85,6 +111,7 @@ function validate(input: unknown): WhistleblowerPayload | { error: string } {
     kontak: kontak || undefined,
     detail,
     kronologi: kronologi || undefined,
+    lampiran,
   };
 }
 
@@ -113,6 +140,7 @@ export async function POST(req: Request) {
       kontak: validated.kontak,
       detail: validated.detail,
       kronologi: validated.kronologi,
+      lampiran: validated.lampiran,
     });
     return NextResponse.json({ ok: true, caseId, timestamp });
   } catch (err) {

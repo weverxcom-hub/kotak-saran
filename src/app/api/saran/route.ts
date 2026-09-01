@@ -1,11 +1,33 @@
 import { NextResponse } from "next/server";
 import { ROLE_OPTIONS, UNIT_OPTIONS, type SuggestionPayload } from "@/lib/form-config";
-import { appendSubmission, SheetsConfigError } from "@/lib/sheets";
+import { appendSubmission, SheetsConfigError, type AttachmentRef } from "@/lib/sheets";
 
 export const runtime = "nodejs";
 
+const MAX_LAMPIRAN = 3;
+
 function isString(v: unknown): v is string {
   return typeof v === "string";
+}
+
+function validateLampiran(input: unknown): AttachmentRef[] | { error: string } {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) return { error: "Format lampiran tidak valid." };
+  if (input.length > MAX_LAMPIRAN) {
+    return { error: `Maksimal ${MAX_LAMPIRAN} lampiran per pengiriman.` };
+  }
+  const out: AttachmentRef[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") return { error: "Format lampiran tidak valid." };
+    const obj = item as Record<string, unknown>;
+    const name = isString(obj.name) ? obj.name.trim() : "";
+    const fileId = isString(obj.fileId) ? obj.fileId.trim() : "";
+    if (!fileId || !name || name.length > 200 || fileId.length > 200) {
+      return { error: "Format lampiran tidak valid." };
+    }
+    out.push({ name, fileId });
+  }
+  return out;
 }
 
 function validate(input: unknown): SuggestionPayload | { error: string } {
@@ -52,6 +74,9 @@ function validate(input: unknown): SuggestionPayload | { error: string } {
   // Allow free-text saudaraAdalah selain ROLE_OPTIONS (sesuai semula).
   void ROLE_OPTIONS;
 
+  const lampiran = validateLampiran(body.lampiran);
+  if ("error" in lampiran) return lampiran;
+
   return {
     saudaraAdalah,
     unitKerja: unitKerja as (typeof UNIT_OPTIONS)[number],
@@ -61,6 +86,7 @@ function validate(input: unknown): SuggestionPayload | { error: string } {
     masukan,
     kronologi,
     kontak,
+    lampiran,
   };
 }
 
@@ -78,7 +104,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    await appendSubmission({
+    const { trackingId, timestamp } = await appendSubmission({
       saudaraAdalah: validated.saudaraAdalah,
       unitKerja: validated.unitKerja,
       isAnonim: validated.isAnonim,
@@ -87,8 +113,9 @@ export async function POST(req: Request) {
       masukan: validated.masukan,
       kronologi: validated.kronologi,
       kontak: validated.kontak,
+      lampiran: validated.lampiran,
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, trackingId, timestamp });
   } catch (err) {
     if (err instanceof SheetsConfigError) {
       return NextResponse.json(
