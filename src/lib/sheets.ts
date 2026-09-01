@@ -382,7 +382,7 @@ export async function fetchSubmissions(): Promise<SubmissionRow[]> {
       lampiran: get("lampiran"),
       status: normalizeStatus(get("status")),
       catatanAdmin: get("catatanAdmin"),
-      terakhirDiupdate: get("terakhirDiupdate"),
+      terakhirDiupdate: parseTimestamp(get("terakhirDiupdate")),
     });
   }
   return out;
@@ -794,7 +794,7 @@ export async function fetchWhistleblowerReports(): Promise<WhistleblowerRow[]> {
         lampiran: cell(12),
         status: normalizeStatus(cell(13)),
         catatanAdmin: cell(14),
-        terakhirDiupdate: cell(15),
+        terakhirDiupdate: parseTimestamp(cell(15)),
       });
     }
     return out;
