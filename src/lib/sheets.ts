@@ -127,12 +127,49 @@ function colLetter(n: number): string {
  * dari awal didesain supaya jalan di "sheet pertama apa pun namanya"),
  * atau "Whistleblower!" untuk tab Whistleblower.
  */
+async function ensureGridColumns(
+  rangePrefix: string,
+  minColumns: number,
+): Promise<void> {
+  const { sheetId } = getConfig();
+  const sheets = getSheetsClient("write");
+  const sheetName = rangePrefix.replace(/!$/, "") || undefined;
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: sheetId,
+    fields: "sheets.properties",
+  });
+  const props = sheetName
+    ? meta.data.sheets?.find((s) => s.properties?.title === sheetName)
+        ?.properties
+    : meta.data.sheets?.[0]?.properties;
+  const gridSheetId = props?.sheetId;
+  const currentCols = props?.gridProperties?.columnCount ?? 0;
+  if (gridSheetId == null || currentCols >= minColumns) return;
+  // Sheets API menolak values.update/append di luar batas grid fisik
+  // ("exceeds grid limits") walau kolom sebelumnya kosong — grid harus
+  // diperlebar dulu sebelum menulis header/kolom baru.
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: sheetId,
+    requestBody: {
+      requests: [
+        {
+          updateSheetProperties: {
+            properties: { sheetId: gridSheetId, gridProperties: { columnCount: minColumns } },
+            fields: "gridProperties.columnCount",
+          },
+        },
+      ],
+    },
+  });
+}
+
 async function ensureHeaderColumns(
   rangePrefix: string,
   requiredHeaders: readonly string[],
 ): Promise<void> {
   const { sheetId } = getConfig();
   const sheets = getSheetsClient("write");
+  await ensureGridColumns(rangePrefix, requiredHeaders.length);
   const lastCol = colLetter(requiredHeaders.length);
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
